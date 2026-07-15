@@ -35,9 +35,21 @@ class DinoGame {
 
     this.gravity = 1;
     this.jumpVelocity = -15.5;
+
     this.initialSpeed = 15;
     this.maxSpeed = 40;
     this.acceleration = 0.0017;
+
+    this.obstacleConfig = {
+      minGap: 220,
+      maxGap: 620,
+
+      pteroUnlockScore: 60,
+      pteroMinChance: 0.18,
+      pteroMaxChance: 0.42,
+
+      repeatPenalty: 0.55,
+    };
 
     this.rlMode = Boolean(options.rlMode);
 
@@ -52,7 +64,10 @@ class DinoGame {
     this.frame = 0;
     this.score = 0;
     this.distance = 0;
-    this.highScore = Number(localStorage.getItem("dinoHighScore") || 0);
+
+    this.highScore = Number(
+      localStorage.getItem("dinoHighScore") || 0
+    );
 
     this.speed = this.initialSpeed;
     this.gameOver = false;
@@ -74,7 +89,10 @@ class DinoGame {
     this.clouds = [];
     this.stars = [];
 
-    this.nextObstacleDistance = 360;
+    this.lastObstacleKind = null;
+    this.sameObstacleStreak = 0;
+
+    this.nextObstacleDistance = this.getNextObstacleGap();
     this.nextCloudDistance = 180;
 
     this.spawnInitialDecorations();
@@ -83,7 +101,7 @@ class DinoGame {
   }
 
   spawnInitialDecorations() {
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 3; i += 1) {
       this.clouds.push({
         x: 450 + i * 310,
         y: this.rng.range(70, 150),
@@ -91,7 +109,7 @@ class DinoGame {
       });
     }
 
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 4; i += 1) {
       this.stars.push({
         x: 160 + i * 260,
         y: this.rng.range(45, 125),
@@ -104,7 +122,9 @@ class DinoGame {
   }
 
   jump() {
-    if (this.gameOver) return;
+    if (this.gameOver) {
+      return;
+    }
 
     this.started = true;
 
@@ -112,11 +132,16 @@ class DinoGame {
       this.dino.vy = this.jumpVelocity;
       this.dino.isJumping = true;
       this.dino.isDucking = false;
+
+      this.dino.w = 44 * this.scale;
+      this.dino.h = 47 * this.scale;
     }
   }
 
   duck(active) {
-    if (this.gameOver) return;
+    if (this.gameOver) {
+      return;
+    }
 
     this.started = true;
 
@@ -124,6 +149,7 @@ class DinoGame {
       if (active) {
         this.dino.vy += 0.8;
       }
+
       return;
     }
 
@@ -149,9 +175,13 @@ class DinoGame {
       3 = release duck
     */
 
-    if (action === 1) this.jump();
-    if (action === 2) this.duck(true);
-    if (action === 3) this.duck(false);
+    if (action === 1) {
+      this.jump();
+    } else if (action === 2) {
+      this.duck(true);
+    } else if (action === 3) {
+      this.duck(false);
+    }
 
     if (!this.started || this.gameOver) {
       return {
@@ -171,6 +201,7 @@ class DinoGame {
     const collided = this.checkCollision();
 
     if (collided) {
+      this.crashDino();
       this.gameOver = true;
       this.updateHighScore();
 
@@ -192,7 +223,10 @@ class DinoGame {
   }
 
   updateSpeed() {
-    this.speed = Math.min(this.maxSpeed, this.speed + this.acceleration);
+    this.speed = Math.min(
+      this.maxSpeed,
+      this.speed + this.acceleration
+    );
   }
 
   updateDino() {
@@ -201,8 +235,11 @@ class DinoGame {
     dino.y += dino.vy;
     dino.vy += this.gravity;
 
-    const standHeight = dino.isDucking ? 30 * this.scale : 47 * this.scale;
-    const floorY = this.groundY - standHeight;
+    const currentHeight = dino.isDucking
+      ? 30 * this.scale
+      : 47 * this.scale;
+
+    const floorY = this.groundY - currentHeight;
 
     if (dino.y >= floorY) {
       dino.y = floorY;
@@ -212,61 +249,120 @@ class DinoGame {
 
     dino.animTimer += 1;
 
-    if (dino.animTimer > Math.max(4, 8 - this.speed * 0.25)) {
+    const animationInterval = Math.max(
+      4,
+      8 - this.speed * 0.25
+    );
+
+    if (dino.animTimer > animationInterval) {
       dino.animTimer = 0;
       dino.runFrame = 1 - dino.runFrame;
     }
   }
 
+  getNextObstacleGap() {
+    const config = this.obstacleConfig;
+    const speedRatio = Math.min(
+      1,
+      this.speed / this.maxSpeed
+    );
+
+    const minGap = config.minGap + this.speed * 8;
+    const maxGap = config.maxGap + this.speed * 16;
+
+    const randomGap = this.rng.range(minGap, maxGap);
+
+    // Adds controlled variation while remaining deterministic for a given seed.
+    const chaos =
+      this.rng.range(-90, 130) * (0.5 + speedRatio);
+
+    return Math.max(160, randomGap + chaos);
+  }
+
   updateObstacles() {
-    for (const obs of this.obstacles) {
-      obs.x -= this.speed;
+    for (const obstacle of this.obstacles) {
+      obstacle.x -= this.speed;
     }
 
-    this.obstacles = this.obstacles.filter((obs) => obs.x + obs.w > -30);
+    this.obstacles = this.obstacles.filter(
+      (obstacle) => obstacle.x + obstacle.w > -30
+    );
 
     this.nextObstacleDistance -= this.speed;
 
     if (this.nextObstacleDistance <= 0) {
       this.spawnObstacle();
-
-      const minGap = 250;
-      const maxGap = 520;
-      const speedBonus = this.speed * 18;
-
-      this.nextObstacleDistance = this.rng.range(
-        minGap + speedBonus,
-        maxGap + speedBonus
-      );
+      this.nextObstacleDistance = this.getNextObstacleGap();
     }
   }
 
   spawnObstacle() {
-    const canSpawnPtero = this.score > 250;
-    const typeRoll = this.rng.next();
+    const config = this.obstacleConfig;
 
-    if (canSpawnPtero && typeRoll < 0.22) {
-      const yOptions = [
-        this.groundY - 40 * this.scale,
-        this.groundY - 68 * this.scale,
-        this.groundY - 92 * this.scale,
-      ];
+    const speedRatio = Math.min(
+      1,
+      this.speed / this.maxSpeed
+    );
 
-      this.obstacles.push({
-        kind: "ptero",
-        spriteA: "ptero1",
-        spriteB: "ptero2",
-        x: this.width + 40,
-        y: this.rng.choice(yOptions),
-        w: 46 * this.scale,
-        h: 40 * this.scale,
-        animFrame: 0,
-        animTimer: 0,
-      });
+    const canSpawnPtero =
+      this.score >= config.pteroUnlockScore;
 
+    let pteroChance = 0;
+
+    if (canSpawnPtero) {
+      pteroChance =
+        config.pteroMinChance +
+        (config.pteroMaxChance - config.pteroMinChance) *
+          speedRatio;
+    }
+
+    if (this.lastObstacleKind === "ptero") {
+      pteroChance *= config.repeatPenalty;
+    }
+
+    if (
+      this.lastObstacleKind === "cactus" &&
+      this.sameObstacleStreak >= 2
+    ) {
+      pteroChance = Math.max(pteroChance, 0.36);
+    }
+
+    const shouldSpawnPtero =
+      canSpawnPtero && this.rng.next() < pteroChance;
+
+    if (shouldSpawnPtero) {
+      this.spawnPtero();
+      this.rememberObstacleKind("ptero");
       return;
     }
 
+    this.spawnCactus();
+    this.rememberObstacleKind("cactus");
+  }
+
+  spawnPtero() {
+    const yOptions = [
+      this.groundY - 38 * this.scale,
+      this.groundY - 62 * this.scale,
+      this.groundY - 88 * this.scale,
+    ];
+
+    const y = this.rng.choice(yOptions);
+
+    this.obstacles.push({
+      kind: "ptero",
+      spriteA: "ptero1",
+      spriteB: "ptero2",
+      x: this.width + this.rng.range(40, 120),
+      y,
+      w: 46 * this.scale,
+      h: 40 * this.scale,
+      animFrame: 0,
+      animTimer: 0,
+    });
+  }
+
+  spawnCactus() {
     const cactusSprites = [
       "cactusSmall1",
       "cactusSmall2",
@@ -278,15 +374,27 @@ class DinoGame {
 
     const sprite = this.rng.choice(cactusSprites);
     const base = DinoAssets.SPRITES[sprite];
+    const cactusScale = this.scale * 0.95;
 
     this.obstacles.push({
       kind: "cactus",
       sprite,
-      x: this.width + 40,
-      y: this.groundY - base.h * this.scale,
-      w: base.w * this.scale,
-      h: base.h * this.scale,
+      x: this.width + this.rng.range(40, 120),
+      y: this.groundY - base.h * cactusScale,
+      w: base.w * cactusScale,
+      h: base.h * cactusScale,
+      drawScale: cactusScale,
     });
+  }
+
+  rememberObstacleKind(kind) {
+    if (this.lastObstacleKind === kind) {
+      this.sameObstacleStreak += 1;
+      return;
+    }
+
+    this.lastObstacleKind = kind;
+    this.sameObstacleStreak = 1;
   }
 
   updateDecorations() {
@@ -294,7 +402,8 @@ class DinoGame {
       cloud.x -= this.speed * cloud.speedFactor;
 
       if (cloud.x < -100) {
-        cloud.x = this.width + this.rng.range(80, 420);
+        cloud.x =
+          this.width + this.rng.range(80, 420);
         cloud.y = this.rng.range(70, 150);
         cloud.speedFactor = this.rng.range(0.15, 0.35);
       }
@@ -304,73 +413,102 @@ class DinoGame {
       star.x -= this.speed * 0.08;
 
       if (star.x < -20) {
-        star.x = this.width + this.rng.range(120, 360);
+        star.x =
+          this.width + this.rng.range(120, 360);
         star.y = this.rng.range(45, 125);
       }
     }
 
-    for (const obs of this.obstacles) {
-      if (obs.kind === "ptero") {
-        obs.animTimer += 1;
+    for (const obstacle of this.obstacles) {
+      if (obstacle.kind !== "ptero") {
+        continue;
+      }
 
-        if (obs.animTimer > 10) {
-          obs.animTimer = 0;
-          obs.animFrame = 1 - obs.animFrame;
-        }
+      obstacle.animTimer += 1;
+
+      if (obstacle.animTimer > 10) {
+        obstacle.animTimer = 0;
+        obstacle.animFrame = 1 - obstacle.animFrame;
       }
     }
   }
 
-  getDinoHitbox() {
-    const d = this.dino;
+  crashDino() {
+    const wasDucking = this.dino.isDucking;
 
-    if (d.isDucking) {
+    this.dino.isDucking = false;
+    this.dino.isJumping = false;
+    this.dino.vy = 0;
+
+    this.dino.w = 44 * this.scale;
+    this.dino.h = 47 * this.scale;
+
+    if (wasDucking) {
+      this.dino.y = this.groundY - this.dino.h;
+    } else {
+      this.dino.y = Math.min(
+        this.dino.y,
+        this.groundY - this.dino.h
+      );
+    }
+  }
+
+  getDinoHitbox() {
+    const dino = this.dino;
+
+    if (dino.isDucking) {
       return {
-        x: d.x + 10,
-        y: d.y + 8,
-        w: d.w - 18,
-        h: d.h - 12,
+        x: dino.x + 10,
+        y: dino.y + 8,
+        w: dino.w - 18,
+        h: dino.h - 12,
       };
     }
 
     return {
-      x: d.x + 16,
-      y: d.y + 8,
-      w: d.w - 28,
-      h: d.h - 14,
+      x: dino.x + 16,
+      y: dino.y + 8,
+      w: dino.w - 28,
+      h: dino.h - 14,
     };
   }
 
-  getObstacleHitbox(obs) {
-    if (obs.kind === "ptero") {
+  getObstacleHitbox(obstacle) {
+    if (obstacle.kind === "ptero") {
       return {
-        x: obs.x + 8,
-        y: obs.y + 8,
-        w: obs.w - 16,
-        h: obs.h - 16,
+        x: obstacle.x + 8,
+        y: obstacle.y + 8,
+        w: obstacle.w - 16,
+        h: obstacle.h - 16,
       };
     }
 
     return {
-      x: obs.x + 6,
-      y: obs.y + 4,
-      w: obs.w - 12,
-      h: obs.h - 6,
+      x: obstacle.x + 6,
+      y: obstacle.y + 4,
+      w: obstacle.w - 12,
+      h: obstacle.h - 6,
     };
   }
 
   checkCollision() {
-    const a = this.getDinoHitbox();
+    const dinoHitbox = this.getDinoHitbox();
 
-    for (const obs of this.obstacles) {
-      const b = this.getObstacleHitbox(obs);
+    for (const obstacle of this.obstacles) {
+      const obstacleHitbox =
+        this.getObstacleHitbox(obstacle);
 
-      if (
-        a.x < b.x + b.w &&
-        a.x + a.w > b.x &&
-        a.y < b.y + b.h &&
-        a.y + a.h > b.y
-      ) {
+      const collided =
+        dinoHitbox.x <
+          obstacleHitbox.x + obstacleHitbox.w &&
+        dinoHitbox.x + dinoHitbox.w >
+          obstacleHitbox.x &&
+        dinoHitbox.y <
+          obstacleHitbox.y + obstacleHitbox.h &&
+        dinoHitbox.y + dinoHitbox.h >
+          obstacleHitbox.y;
+
+      if (collided) {
         return true;
       }
     }
@@ -379,22 +517,31 @@ class DinoGame {
   }
 
   updateHighScore() {
-    if (this.score > this.highScore) {
-      this.highScore = this.score;
-      localStorage.setItem("dinoHighScore", String(this.highScore));
+    if (this.score <= this.highScore) {
+      return;
     }
+
+    this.highScore = this.score;
+
+    localStorage.setItem(
+      "dinoHighScore",
+      String(this.highScore)
+    );
   }
 
   getNearestObstacle() {
     let nearest = null;
     let minDistance = Infinity;
 
-    for (const obs of this.obstacles) {
-      const dist = obs.x - this.dino.x;
+    for (const obstacle of this.obstacles) {
+      const distance = obstacle.x - this.dino.x;
 
-      if (dist >= -obs.w && dist < minDistance) {
-        minDistance = dist;
-        nearest = obs;
+      if (
+        distance >= -obstacle.w &&
+        distance < minDistance
+      ) {
+        minDistance = distance;
+        nearest = obstacle;
       }
     }
 
@@ -436,11 +583,27 @@ class DinoGame {
         speed: this.speed / this.maxSpeed,
         dinoY: this.dino.y / this.height,
         dinoVy: this.dino.vy / 20,
+
         obstacleDistance: nearest
-          ? Math.min(1, (nearest.x - this.dino.x) / this.width)
+          ? Math.max(
+              -1,
+              Math.min(
+                1,
+                (nearest.x - this.dino.x) / this.width
+              )
+            )
           : 1,
-        obstacleHeight: nearest ? nearest.h / 120 : 0,
-        obstacleY: nearest ? nearest.y / this.height : 0,
+
+        obstacleHeight: nearest
+          ? nearest.h / 120
+          : 0,
+
+        obstacleY: nearest
+          ? nearest.y / this.height
+          : 0,
+
+        obstacleIsPtero:
+          nearest && nearest.kind === "ptero" ? 1 : 0,
       },
     };
   }
@@ -463,34 +626,65 @@ class DinoRenderer {
     };
 
     this.setupCanvas();
-    window.addEventListener("resize", () => this.setupCanvas());
+
+    window.addEventListener("resize", () => {
+      this.setupCanvas();
+    });
   }
 
   setupCanvas() {
-    const cssWidth = Math.min(window.innerWidth, 1512);
-    const cssHeight = Math.round(cssWidth * (360 / 1200));
+    const cssWidth = Math.min(
+      window.innerWidth,
+      1512
+    );
+
+    const cssHeight = Math.round(
+      cssWidth * (360 / 1200)
+    );
 
     this.canvas.style.width = `${cssWidth}px`;
     this.canvas.style.height = `${cssHeight}px`;
     this.canvas.style.imageRendering = "pixelated";
 
-    this.canvas.width = Math.round(this.game.width * this.pixelRatio);
-    this.canvas.height = Math.round(this.game.height * this.pixelRatio);
+    this.canvas.width = Math.round(
+      this.game.width * this.pixelRatio
+    );
 
-    this.ctx.setTransform(this.pixelRatio, 0, 0, this.pixelRatio, 0, 0);
+    this.canvas.height = Math.round(
+      this.game.height * this.pixelRatio
+    );
+
+    this.ctx.setTransform(
+      this.pixelRatio,
+      0,
+      0,
+      this.pixelRatio,
+      0,
+      0
+    );
+
     this.ctx.imageSmoothingEnabled = false;
   }
 
   clear() {
     this.ctx.fillStyle = this.colors.bg;
-    this.ctx.fillRect(0, 0, this.game.width, this.game.height);
+
+    this.ctx.fillRect(
+      0,
+      0,
+      this.game.width,
+      this.game.height
+    );
   }
 
   render() {
     this.clear();
 
-    this.drawNightSky();
+    // Render back-to-front: stars, moon, then clouds.
+    this.drawStars();
+    this.drawMoon();
     this.drawClouds();
+
     this.drawGround();
     this.drawObstacles();
     this.drawDino();
@@ -501,17 +695,38 @@ class DinoRenderer {
     }
   }
 
-  drawNightSky() {
+  drawStars() {
     const ctx = this.ctx;
 
     ctx.save();
     ctx.globalAlpha = 0.12;
 
-    this.assets.draw(ctx, "moon", 190, 105, 2.2);
-
     for (const star of this.game.stars) {
-      this.assets.draw(ctx, "star", star.x, star.y, 1.6);
+      this.assets.draw(
+        ctx,
+        "star",
+        star.x,
+        star.y,
+        1.6
+      );
     }
+
+    ctx.restore();
+  }
+
+  drawMoon() {
+    const ctx = this.ctx;
+
+    ctx.save();
+    ctx.globalAlpha = 0.12;
+
+    this.assets.draw(
+      ctx,
+      "moon",
+      190,
+      105,
+      2.2
+    );
 
     ctx.restore();
   }
@@ -523,7 +738,13 @@ class DinoRenderer {
     ctx.globalAlpha = 0.08;
 
     for (const cloud of this.game.clouds) {
-      this.assets.draw(ctx, "cloud", cloud.x, cloud.y, 2);
+      this.assets.draw(
+        ctx,
+        "cloud",
+        cloud.x,
+        cloud.y,
+        2
+      );
     }
 
     ctx.restore();
@@ -531,73 +752,123 @@ class DinoRenderer {
 
   drawGround() {
     const ctx = this.ctx;
+
     const groundSprite =
-      (this.assets.sprites && this.assets.sprites.horizon) ||
+      (this.assets.sprites &&
+        this.assets.sprites.horizon) ||
       DinoAssets.SPRITES.horizon;
 
     if (!groundSprite) {
-      // Fallback line if horizon sprite is missing
       ctx.strokeStyle = this.colors.fg;
       ctx.lineWidth = 2;
+
       ctx.beginPath();
       ctx.moveTo(0, this.game.groundY);
-      ctx.lineTo(this.game.width, this.game.groundY);
+      ctx.lineTo(
+        this.game.width,
+        this.game.groundY
+      );
       ctx.stroke();
+
       return;
     }
 
     const scale = this.game.scale;
-    const sw = groundSprite.w;
-    const sh = groundSprite.h;
-    const dw = sw * scale;
-    const dh = sh * scale;
 
-    // Place the bottom of the horizon sprite exactly on groundY
-    const y = Math.round(this.game.groundY - dh);
+    const sourceWidth = groundSprite.w;
+    const sourceHeight = groundSprite.h;
 
-    // Smooth scrolling based on travelled distance
-    const offset = Math.floor(this.game.distance) % dw;
+    const drawWidth = sourceWidth * scale;
+    const drawHeight = sourceHeight * scale;
 
-    for (let x = -offset; x < this.game.width + dw; x += dw) {
+    const y = Math.round(
+      this.game.groundY - drawHeight
+    );
+
+    const offset =
+      Math.floor(this.game.distance) % drawWidth;
+
+    for (
+      let x = -offset;
+      x < this.game.width + drawWidth;
+      x += drawWidth
+    ) {
       ctx.drawImage(
         this.assets.image,
         groundSprite.x,
         groundSprite.y,
-        groundSprite.w,
-        groundSprite.h,
+        sourceWidth,
+        sourceHeight,
         Math.round(x),
         y,
-        dw,
-        dh
+        drawWidth,
+        drawHeight
       );
     }
   }
 
   drawDino() {
-    const d = this.game.dino;
+    const dino = this.game.dino;
+
     let sprite = "trexIdle";
+    let drawY = dino.y;
 
     if (this.game.gameOver) {
       sprite = "trexCrashed";
-    } else if (d.isDucking) {
-      sprite = d.runFrame === 0 ? "trexDuck1" : "trexDuck2";
+
+      if (dino.y >= this.game.groundY - dino.h) {
+        drawY =
+          this.game.groundY - 47 * this.game.scale;
+      }
+    } else if (dino.isDucking) {
+      sprite =
+        dino.runFrame === 0
+          ? "trexDuck1"
+          : "trexDuck2";
     } else if (this.game.started) {
-      sprite = d.runFrame === 0 ? "trexRun1" : "trexRun2";
+      sprite =
+        dino.runFrame === 0
+          ? "trexRun1"
+          : "trexRun2";
     }
 
-    this.assets.draw(this.ctx, sprite, d.x, d.y, this.game.scale);
+    this.assets.draw(
+      this.ctx,
+      sprite,
+      dino.x,
+      drawY,
+      this.game.scale
+    );
   }
 
   drawObstacles() {
     const ctx = this.ctx;
 
-    for (const obs of this.game.obstacles) {
-      if (obs.kind === "ptero") {
-        const sprite = obs.animFrame === 0 ? obs.spriteA : obs.spriteB;
-        this.assets.draw(ctx, sprite, obs.x, obs.y, this.game.scale);
-      } else {
-        this.assets.draw(ctx, obs.sprite, obs.x, obs.y, this.game.scale);
+    for (const obstacle of this.game.obstacles) {
+      if (obstacle.kind === "ptero") {
+        const sprite =
+          obstacle.animFrame === 0
+            ? obstacle.spriteA
+            : obstacle.spriteB;
+
+        this.assets.draw(
+          ctx,
+          sprite,
+          obstacle.x,
+          obstacle.y,
+          this.game.scale
+        );
+
+        continue;
       }
+
+      this.assets.draw(
+        ctx,
+        obstacle.sprite,
+        obstacle.x,
+        obstacle.y,
+        obstacle.drawScale || this.game.scale
+      );
     }
   }
 
@@ -611,10 +882,19 @@ class DinoRenderer {
     ctx.textAlign = "right";
     ctx.textBaseline = "top";
 
-    const score = String(this.game.score).padStart(5, "0");
-    const hi = String(this.game.highScore).padStart(5, "0");
+    const score = String(
+      this.game.score
+    ).padStart(5, "0");
 
-    ctx.fillText(`HI ${hi}  ${score}`, this.game.width - 52, 42);
+    const highScore = String(
+      this.game.highScore
+    ).padStart(5, "0");
+
+    ctx.fillText(
+      `HI ${highScore}  ${score}`,
+      this.game.width - 52,
+      42
+    );
 
     ctx.restore();
   }
@@ -629,7 +909,11 @@ class DinoRenderer {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
-    ctx.fillText("GAME OVER", this.game.width / 2, 142);
+    ctx.fillText(
+      "GAME OVER",
+      this.game.width / 2,
+      142
+    );
 
     this.assets.draw(
       ctx,
@@ -644,7 +928,9 @@ class DinoRenderer {
 }
 
 (async function bootstrap() {
-  const canvas = document.getElementById("gameCanvas");
+  const canvas =
+    document.getElementById("gameCanvas");
+
   const assets = await DinoAssets.load();
 
   const game = new DinoGame({
@@ -655,16 +941,24 @@ class DinoRenderer {
     seed: 42,
   });
 
-  const renderer = new DinoRenderer(canvas, assets, game);
+  const renderer = new DinoRenderer(
+    canvas,
+    assets,
+    game
+  );
 
   let lastTime = performance.now();
   let accumulator = 0;
+
   const fixedDelta = 1000 / 60;
 
   function loop(now) {
-    const delta = now - lastTime;
-    lastTime = now;
+    const delta = Math.min(
+      now - lastTime,
+      fixedDelta * 5
+    );
 
+    lastTime = now;
     accumulator += delta;
 
     while (accumulator >= fixedDelta) {
@@ -673,7 +967,6 @@ class DinoRenderer {
     }
 
     renderer.render();
-
     requestAnimationFrame(loop);
   }
 
@@ -727,12 +1020,12 @@ function setupControls(game) {
 
 function exposeRLApi(game) {
   /*
-    This API is designed for RL / GA / NEAT agents.
+    API for RL / GA / NEAT agents.
 
     Example:
-      window.DinoRL.reset(123)
-      const result = window.DinoRL.step(1)
-      const state = window.DinoRL.getState()
+      window.DinoRL.reset(123);
+      const result = window.DinoRL.step(1);
+      const state = window.DinoRL.getState();
   */
 
   window.DinoRL = {
@@ -760,7 +1053,10 @@ function exposeRLApi(game) {
     },
 
     setSpeed(value) {
-      game.speed = value;
+      game.speed = Math.max(
+        0,
+        Math.min(game.maxSpeed, Number(value) || 0)
+      );
     },
 
     getRawGame() {
