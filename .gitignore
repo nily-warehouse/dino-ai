@@ -1,0 +1,19 @@
+# python
+__pycache__/
+__pypackages__/
+.venv/
+
+# jupyter
+.ipynb_checkpoints
+profile_default/
+ipython_config.py
+
+# environment
+.env
+temp/
+
+# macos
+.DS_Store
+
+# vscode
+.vscode/
